@@ -1,0 +1,58 @@
+
+pipeline {
+    agent any
+	environment {
+		DOCKER_IMAGE 		= "hainguyen0126/nginx"
+		HELM_VALUES_PATH 	= "Helm/app-demo-value.yml"
+    	HELM_CHART_PATH 	= "Helm/app-demo"
+		NAMESPACE 			= "mock-project"
+		HELM_RELEASE 		= "my-demo-mock"
+		DOCKER_TAG 			= "${GIT_BRANCH.tokenize('/').pop()}-${GIT_COMMIT.substring(0,7)}"
+	}
+	stages {
+		stage ("Build and push to registry") {
+			options {
+				timeout (time: 10, unit: 'MINUTES')
+			}
+
+			steps {
+				sh '''
+					docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
+					docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest
+					docker image ls | grep ${DOCKER_IMAGE}'''
+					withCredentials([usernamePassword(credentialsId: 'docker-hub', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+						sh 'echo $DOCKER_PASSWORD | docker login --username $DOCKER_USERNAME --password-stdin'
+						sh "docker push ${DOCKER_IMAGE}:${DOCKER_TAG}"
+						sh "docker push ${DOCKER_IMAGE}:latest"
+					}
+
+				//clean to save disk
+                sh "docker image rm ${DOCKER_IMAGE}:${DOCKER_TAG}"
+                sh "docker image rm ${DOCKER_IMAGE}:latest"
+			}
+
+		}
+
+		stage (" Apply K8s") {
+			steps {
+				
+				script {
+					echo " Deploy to K8s"
+					// sh "kubectl create namespace $NAMESPACE"
+					sh """
+						helm upgrade --install $HELM_RELEASE \
+							--namespace=$NAMESPACE \
+							-f $HELM_VALUES_PATH \
+							$HELM_CHART_PATH \
+							--set image.repository=${DOCKER_IMAGE} \
+							--set image.tag=${DOCKER_TAG} 
+					"""
+
+					// sh "helm install $HELM_RELEASE --namespace=$NAMESPACE --set -f $HELM_VALUES_PATH $HELM_CHART_PATH  image.repository=${DOCKER_IMAGE}, image.tag=latest"
+					// sh "helm --namespace=$NAMESPACE --set upgrade $HELM_RELEASE -f $HELM_VALUES_PATH $HELM_CHART_PATH  image.repository=${DOCKER_IMAGE}, image.tag=latest"
+				}
+			}
+		}
+
+	}
+} 
